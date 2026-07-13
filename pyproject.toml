@@ -1,0 +1,64 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "jepalm"
+version = "0.1.0"
+description = "H-JEPA-LM: Hierarchical Joint-Embedding Predictive Language Model"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.10"
+authors = [
+    {name = "Griffith-7"},
+]
+keywords = ["jepa", "language-model", "self-supervised", "representation-learning", "world-model"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = [
+    "torch>=2.0.0",
+    "transformers>=4.30.0",
+    "datasets>=2.14.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "pytest-cov>=4.0",
+    "matplotlib>=3.7.0",
+]
+notebooks = [
+    "jupyter>=1.0.0",
+    "ipywidgets>=8.0.0",
+]
+
+[project.scripts]
+hjepa = "jepalm.cli:main"
+hjepa-train = "jepalm.cli:train_cmd"
+hjepa-bench = "jepalm.cli:bench_cmd"
+hjepa-test = "jepalm.cli:test_cmd"
+
+[project.urls]
+Homepage = "https://github.com/Griffith-7/JEPA-LM"
+Repository = "https://github.com/Griffith-7/JEPA-LM"
+Issues = "https://github.com/Griffith-7/JEPA-LM/issues"
+
+[tool.setuptools.packages.find]
+include = ["jepalm*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_functions = ["test_*"]
+addopts = "-v --tb=short"
+
+[tool.coverage.run]
+source = ["jepalm"]
