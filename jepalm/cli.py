@@ -61,38 +61,37 @@ def train_cmd():
     config.max_samples = args.max_samples
     config.output_dir = args.output_dir
 
-    print(f"Training H-JEPA-LM ({args.preset}) on {args.device}...")
+    print(f"Training JEPA-LM ({args.preset}) on {args.device}...")
     from jepalm.train import train
     train(config)
 
 
 def bench_cmd():
     print("Running 5-way benchmark...")
-    import subprocess, sys
+    import subprocess
     subprocess.run([sys.executable, "benchmark_hjepa.py"])
 
 
 def test_cmd():
     print("Running smoke test...")
-    import subprocess, sys
-    subprocess.run([sys.executable, "test_model.py"])
+    import subprocess
+    subprocess.run([sys.executable, "-m", "pytest", "tests/", "-v"])
 
 
 def info_cmd():
-    from jepalm.model import JEPELM
-    from jepalm.config import JEPAConfig
-    from hjepa_model import HJEPELM
+    from jepalm import JEPELM, JEPAConfig, HJEPELM, HConfig
 
     print("=" * 50)
     print("JEPA-LM Models")
     print("=" * 50)
 
-    for name, cls, cfg_fn in [
-        ("JEPA-LM (base)", JEPELM, JEPAConfig),
-        ("H-JEPA-LM", HJEPELM, lambda: __import__('hjepa_model', fromlist=['HConfig']).HConfig()),
-    ]:
+    models = [
+        ("JEPA-LM (base)", JEPELM, JEPAConfig()),
+        ("H-JEPA-LM", HJEPELM, HConfig()),
+    ]
+
+    for name, cls, config in models:
         try:
-            config = cfg_fn()
             model = cls(config)
             n = sum(p.numel() for p in model.parameters())
             print(f"\n  {name}: {n:,} parameters")

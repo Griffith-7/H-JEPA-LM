@@ -10,10 +10,13 @@ from .predictor import Predictor
 from .decoder import LightweightDecoder
 from .loss import jepa_loss, ntp_loss, total_loss
 from .masking import create_span_mask
+from .hjepa import HJEPELM, HConfig
 
 __all__ = [
     "JEPAConfig",
     "JEPELM",
+    "HJEPELM",
+    "HConfig",
     "BidirectionalEncoder",
     "EMATargetEncoder",
     "Predictor",

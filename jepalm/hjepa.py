@@ -10,6 +10,23 @@ Improvements over base JEPA-LM:
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from dataclasses import dataclass
+
+
+@dataclass
+class HConfig:
+    vocab_size: int = 30522
+    dim: int = 256
+    layers: int = 4
+    heads: int = 4
+    ff_dim: int = 1024
+    max_len: int = 128
+    num_levels: int = 2
+    action_dim: int = 64
+    dropout: float = 0.1
+    mask_prob: float = 0.15
+    mask_token_id: int = 103
+    momentum: float = 0.996
 
 
 class Block(nn.Module):
@@ -36,7 +53,6 @@ class Block(nn.Module):
 
 
 class HierarchicalEncoder(nn.Module):
-    """Multi-level encoder: low-level captures tokens, high-level captures semantics."""
     def __init__(self, vocab_size, dim, layers, heads, ff_dim, max_len, num_levels=2, dropout=0.1):
         super().__init__()
         self.dim = dim
@@ -82,7 +98,6 @@ class HierarchicalEncoder(nn.Module):
 
 
 class ActionEncoder(nn.Module):
-    """Encodes actions into the latent space."""
     def __init__(self, action_dim, hidden_dim):
         super().__init__()
         self.proj = nn.Sequential(
@@ -95,7 +110,6 @@ class ActionEncoder(nn.Module):
 
 
 class HierarchicalPredictor(nn.Module):
-    """Multi-level predictor with action conditioning."""
     def __init__(self, dim, num_levels, num_heads, dropout=0.1):
         super().__init__()
         self.num_levels = num_levels
@@ -140,34 +154,7 @@ class HierarchicalPredictor(nn.Module):
         return predictions
 
 
-class EMATarget(nn.Module):
-    """EMA target for a specific level."""
-    def __init__(self, source_layers, source_norm):
-        super().__init__()
-        self.layers = nn.ModuleList()
-        self.norm = nn.LayerNorm(source_layers[0].ff[0].in_features if hasattr(source_layers[0], 'ff') else 256)
-        for p in self.layers.parameters():
-            p.requires_grad = False
-
-    def sync_from(self, source_layers, source_norm):
-        self.layers = nn.ModuleList([Block(
-            layer.ff[2].out_features if hasattr(layer, 'ff') else 256,
-            layer.attn.num_heads,
-            layer.ff[2].out_features * 4 if hasattr(layer, 'ff') else 1024
-        ) for layer in source_layers])
-        self.norm.load_state_dict(source_norm.state_dict())
-        for p in self.layers.parameters():
-            p.requires_grad = False
-
-    @torch.no_grad()
-    def update(self, source_layers, source_norm, momentum):
-        for p, tp in zip(source_layers.parameters(), self.layers.parameters()):
-            tp.data.mul_(momentum).add_(p.data, alpha=1 - momentum)
-        for p, tp in zip(source_norm.parameters(), self.norm.parameters()):
-            tp.data.mul_(momentum).add_(p.data, alpha=1 - momentum)
-
-
-class HJEPALM(nn.Module):
+class HJEPELM(nn.Module):
     """Hierarchical JEPA-LM with Action Conditioning.
 
     Architecture:
@@ -179,49 +166,71 @@ class HJEPALM(nn.Module):
     Primary objective: Multi-level JEPA loss
     Secondary objective: Weak NTP loss (reconstruct tokens)
     """
-    def __init__(self, vocab_size=30522, dim=256, layers=4, heads=4, ff_dim=1024,
-                 max_len=128, num_levels=2, action_dim=64, dropout=0.1):
+    def __init__(self, config=None, **kwargs):
         super().__init__()
-        self.dim = dim
-        self.num_levels = num_levels
-        self.vocab_size = vocab_size
+        if config is None:
+            config = HConfig(**kwargs)
+        self.config = config
 
-        self.encoder = HierarchicalEncoder(vocab_size, dim, layers, heads, ff_dim, max_len, num_levels, dropout)
+        self.dim = config.dim
+        self.num_levels = config.num_levels
+        self.vocab_size = config.vocab_size
 
-        self.target_encoders = nn.ModuleList()
-        for lvl in range(num_levels):
-            te = HierarchicalEncoder(vocab_size, dim, layers, heads, ff_dim, max_len, 1, dropout)
-            for p in te.parameters():
+        self.encoder = HierarchicalEncoder(
+            config.vocab_size, config.dim, config.layers, config.heads,
+            config.ff_dim, config.max_len, config.num_levels, config.dropout)
+
+        layers_per_level = config.layers // config.num_levels
+        self.target_layers = nn.ModuleList()
+        self.target_norms = nn.ModuleList()
+        for lvl in range(config.num_levels):
+            tl = nn.ModuleList([Block(config.dim, config.heads, config.ff_dim, config.dropout)
+                                for _ in range(layers_per_level)])
+            tn = nn.LayerNorm(config.dim)
+            for p in tl.parameters():
                 p.requires_grad = False
-            self.target_encoders.append(te)
+            for p in tn.parameters():
+                p.requires_grad = False
+            self.target_layers.append(tl)
+            self.target_norms.append(tn)
 
-        self.predictor = HierarchicalPredictor(dim, num_levels, heads, dropout)
+        self.predictor = HierarchicalPredictor(config.dim, config.num_levels, config.heads, config.dropout)
 
-        self.action_encoder = ActionEncoder(action_dim, dim)
+        self.action_encoder = ActionEncoder(config.action_dim, config.dim)
 
         self.decoder = nn.Sequential(
-            nn.Linear(dim, ff_dim), nn.GELU(), nn.Dropout(dropout),
-            nn.Linear(ff_dim, vocab_size))
+            nn.Linear(config.dim, config.ff_dim), nn.GELU(), nn.Dropout(config.dropout),
+            nn.Linear(config.ff_dim, config.vocab_size))
 
         self._sync_targets()
 
     @torch.no_grad()
     def _sync_targets(self):
-        for lvl, te in enumerate(self.target_encoders):
-            src_layers = self.encoder.level_layers[lvl]
-            src_norm = self.encoder.level_norms[lvl]
-            for tp, sp in zip(te.parameters(), [p for l in src_layers for p in l.parameters()] + list(src_norm.parameters())):
+        for lvl in range(self.num_levels):
+            for tp, sp in zip(self.target_layers[lvl].parameters(),
+                              self.encoder.level_layers[lvl].parameters()):
                 tp.data.copy_(sp.data)
+            self.target_norms[lvl].load_state_dict(self.encoder.level_norms[lvl].state_dict())
 
     @torch.no_grad()
-    def update_targets(self, momentum=0.996):
-        for lvl, te in enumerate(self.target_encoders):
-            for p, tp in zip([p for l in self.encoder.level_layers[lvl] for p in l.parameters()], te.parameters()):
-                if tp.requires_grad is False:
-                    tp.data.mul_(momentum).add_(p.data, alpha=1 - momentum)
-            for p, tp in zip(self.encoder.level_norms[lvl].parameters(), te.norm.parameters()):
-                if tp.requires_grad is False:
-                    tp.data.mul_(momentum).add_(p.data, alpha=1 - momentum)
+    def update_targets(self, momentum=None):
+        if momentum is None:
+            momentum = self.config.momentum
+        for lvl in range(self.num_levels):
+            for p, tp in zip(self.encoder.level_layers[lvl].parameters(),
+                             self.target_layers[lvl].parameters()):
+                tp.data.mul_(momentum).add_(p.data, alpha=1 - momentum)
+            for p, tp in zip(self.encoder.level_norms[lvl].parameters(),
+                             self.target_norms[lvl].parameters()):
+                tp.data.mul_(momentum).add_(p.data, alpha=1 - momentum)
+
+    def _target_forward(self, input_ids, level):
+        B, N = input_ids.shape
+        pos = torch.arange(N, device=input_ids.device).unsqueeze(0).expand(B, -1)
+        h = self.encoder.token_embed(input_ids) + self.encoder.pos_embed(pos)
+        for layer in self.target_layers[level]:
+            h = layer(h, causal=False)
+        return self.target_norms[level](h)
 
     def encode(self, input_ids):
         return self.encoder(input_ids)
@@ -231,7 +240,12 @@ class HJEPALM(nn.Module):
             return hidden_levels[-1].mean(dim=1)
         return hidden_levels.mean(dim=1)
 
-    def compute_loss(self, input_ids, mask_token_id, actions=None, mask_prob=0.15):
+    def compute_loss(self, input_ids, mask_token_id=None, actions=None, mask_prob=None):
+        if mask_token_id is None:
+            mask_token_id = self.config.mask_token_id
+        if mask_prob is None:
+            mask_prob = self.config.mask_prob
+
         B, N = input_ids.shape
         mask = torch.rand(B, N, device=input_ids.device) < mask_prob
 
@@ -261,11 +275,11 @@ class HJEPALM(nn.Module):
         with torch.no_grad():
             target_outputs = []
             for lvl in range(self.num_levels):
-                tgt = self.target_encoders[lvl]
-                full_enc = tgt.forward(input_ids, level=0)
+                full_enc = self._target_forward(input_ids, lvl)
                 target_outputs.append(full_enc)
 
-        predicted = self.predictor(encoder_outputs, padded_pos, actions)
+        encoded_actions = self.action_encoder(actions) if actions is not None else None
+        predicted = self.predictor(encoder_outputs, padded_pos, encoded_actions)
 
         total_loss = torch.tensor(0.0, device=input_ids.device, requires_grad=True)
         for lvl in range(self.num_levels):
@@ -280,7 +294,6 @@ class HJEPALM(nn.Module):
         return total_loss, total_loss.item()
 
     def predict_next_state(self, input_ids, actions):
-        """World model: predict next latent state given current state and action."""
         with torch.no_grad():
             current = self.encode(input_ids)
             if isinstance(current, list):
@@ -291,14 +304,12 @@ class HJEPALM(nn.Module):
         return predicted
 
     def plan_actions(self, input_ids, goal_latent, num_steps=5, num_candidates=10):
-        """Plan actions to reach a goal state in latent space."""
         with torch.no_grad():
             current = self.encode(input_ids)
             if isinstance(current, list):
                 current = current[-1]
 
         best_actions = None
-        best_distance = float('inf')
 
         for _ in range(num_steps):
             candidates = torch.randn(
@@ -331,33 +342,11 @@ class HJEPALM(nn.Module):
     def count_parameters(self):
         total = sum(p.numel() for p in self.parameters())
         trainable = sum(p.numel() for p in self.parameters() if p.requires_grad)
-        return {"total": total, "trainable": trainable}
-
-
-def test_hjepa():
-    model = HJEPALM(vocab_size=30522, dim=128, layers=4, heads=4, ff_dim=512, max_len=64, num_levels=2)
-    params = model.count_parameters()
-    print(f"H-JEPA-LM Parameters: {params['total']:,} (trainable: {params['trainable']:,})")
-
-    input_ids = torch.randint(0, 30522, (2, 64))
-    mask_token_id = 103
-
-    loss, val = model.compute_loss(input_ids, mask_token_id)
-    print(f"JEPA Loss: {loss.item():.4f}")
-
-    actions = torch.randn(2, 64)
-    loss_action, val_action = model.compute_loss(input_ids, mask_token_id, actions=actions)
-    print(f"JEPA Loss (with action): {loss_action.item():.4f}")
-
-    next_state = model.predict_next_state(input_ids, actions)
-    print(f"Next state shape: {next_state.shape}")
-
-    goal_latent = torch.randn(2, 128)
-    planned_actions = model.plan_actions(input_ids, goal_latent, num_steps=3, num_candidates=5)
-    print(f"Planned actions shape: {planned_actions.shape}")
-
-    print("All tests passed!")
-
-
-if __name__ == "__main__":
-    test_hjepa()
+        encoder_params = sum(p.numel() for p in self.encoder.parameters())
+        predictor_params = sum(p.numel() for p in self.predictor.parameters())
+        return {
+            "total": total,
+            "trainable": trainable,
+            "encoder": encoder_params,
+            "predictor": predictor_params,
+        }
