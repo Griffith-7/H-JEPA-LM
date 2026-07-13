@@ -2,7 +2,7 @@
   <img src="benchmarks/architecture_overview.png" width="100%">
 </p>
 
-<h1 align="center">JEPA-LM</h1>
+<h1 align="center">H-JEPA-LM</h1>
 
 <p align="center">
   <strong>Joint-Embedding Predictive Language Model</strong><br>
