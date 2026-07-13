@@ -1,59 +1,123 @@
-# JEPA-LM: Joint-Embedding Predictive Language Model
+<p align="center">
+  <img src="benchmarks/architecture_overview.png" width="100%">
+</p>
 
-A **fundamentally different language model** that learns by predicting latent representations, not tokens.
+<h1 align="center">JEPA-LM</h1>
 
-## What is JEPA-LM?
+<p align="center">
+  <strong>Joint-Embedding Predictive Language Model</strong><br>
+  A fundamentally different approach to language modeling — predicting latent representations, not tokens.
+</p>
 
-Traditional LLMs (GPT, Llama) predict the next token left-to-right. JEPA-LM predicts **meaning** — the latent representation of masked text spans — in embedding space.
+<p align="center">
+  <a href="https://www.python.org/downloads/"><img src="https://img.shields.io/badge/python-3.10+-blue.svg" alt="Python 3.10+"></a>
+  <a href="https://pytorch.org"><img src="https://img.shields.io/badge/PyTorch-2.0+-ee4c2c.svg" alt="PyTorch 2.0+"></a>
+  <a href="/Griffith-7/JEPA-LM/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-green.svg" alt="License: MIT"></a>
+  <a href="https://github.com/Griffith-7/JEPA-LM/pulls"><img src="https://img.shields.io/badge/PRs-welcome-brightgreen.svg" alt="PRs Welcome"></a>
+</p>
 
-### Key Innovation: JEPA as PRIMARY objective
-- **JEPA-LM (Ours)**: JEPA is the core design, text generation is secondary
-- **LLM-JEPA (ICLR 2026)**: JEPA is bolted on as secondary loss to existing LLM
+---
+
+## What makes JEPA-LM different
+
+Traditional LLMs predict the next token. JEPA-LM predicts **meaning** — the latent representation of masked text — in embedding space. This produces dramatically more diverse and information-rich representations.
+
+| Capability | GPT (NTP) | BERT (MLM) | LLM-JEPA | **JEPA-LM** | **H-JEPA-LM** |
+|:--|:--:|:--:|:--:|:--:|:--:|
+| Cosine Similarity ↓ | 0.998 | 0.850 | 0.998 | 0.857 | **0.774** |
+| Embedding Std Dev ↑ | 0.040 | 0.297 | 0.040 | 0.231 | **0.308** |
+| SV Ratio ↓ | 0.898 | 0.576 | 0.898 | 0.514 | **0.457** |
+
+> **H-JEPA-LM achieves 23% lower cosine similarity than LLM-JEPA** — embeddings are far more diverse and information-dense.
+
+## Key innovation: JEPA as primary objective
+
+```
+                    ┌──────────────────────────────────────────────┐
+                    │            JEPA-LM vs LLM-JEPA              │
+                    ├──────────────────────────────────────────────┤
+                    │                                              │
+                    │  LLM-JEPA (ICLR 2026):                      │
+                    │    Existing LLM + bolted-on JEPA loss        │
+                    │    → JEPA is secondary (optional)            │
+                    │    → Causal attention (left-to-right)        │
+                    │    → Needs paired Text↔Code data             │
+                    │                                              │
+                    │  JEPA-LM (Ours):                             │
+                    │    New architecture with JEPA as core         │
+                    │    → JEPA is PRIMARY objective                │
+                    │    → Bidirectional attention                  │
+                    │    → Self-supervised via span masking         │
+                    │    → EMA target encoder prevents collapse     │
+                    │                                              │
+                    └──────────────────────────────────────────────┘
+```
 
 ## Architecture
 
 ```
 Input: "The cat sat on the [MASK] because it was [MASK]"
        ↓
-Hierarchical Encoder (bidirectional) → multi-level latent representations
-       ↓
-Hierarchical Predictor → predicted latents for masked spans
-       ↓
-EMA Target Encoder → stable target latents
-       ↓
-Multi-level JEPA Loss (cosine similarity)
-       ↓
-Action Conditioning → predict consequences of actions
-       ↓
-World Model → plan actions in latent space
+┌─────────────────────────────────────────────────────────────────┐
+│  Hierarchical Encoder (bidirectional)                           │
+│  → Multi-level latent representations (token + semantic)        │
+├─────────────────────────────────────────────────────────────────┤
+│  Hierarchical Predictor (narrow bottleneck)                     │
+│  → Predicts latents for masked spans at each level              │
+├─────────────────────────────────────────────────────────────────┤
+│  EMA Target Encoder (stop-gradient)                             │
+│  → Provides stable targets, prevents embedding collapse         │
+├─────────────────────────────────────────────────────────────────┤
+│  Multi-level JEPA Loss (cosine similarity)                      │
+│  → Minimizes distance between predicted and target latents      │
+├─────────────────────────────────────────────────────────────────┤
+│  Action Conditioning (highest level only)                       │
+│  → Encodes actions and fuses into semantic-level predictions     │
+├─────────────────────────────────────────────────────────────────┤
+│  World Model + Planning                                         │
+│  → Plans action sequences in latent space (K=10 rollouts)       │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
-## Features
+## Benchmarks
 
-- **Hierarchical JEPA (H-JEPA)**: Multi-level prediction (token details → semantic meaning)
-- **Action Conditioning**: Predict what happens if you take an action
-- **World Model**: Plan sequences of actions in latent space
-- **EMA Target Encoder**: Prevents embedding collapse
-- **Self-supervised**: No paired data needed — masking creates the two views
+<p align="center">
+  <img src="benchmarks/diversity_benchmarks.png" width="100%">
+</p>
 
-## Results
+<p align="center">
+  <img src="benchmarks/cosine_similarity.png" width="80%">
+</p>
 
-| Metric | GPT-NTP | BERT-MLM | LLM-JEPA | **JEPA-LM** | **H-JEPA-LM** |
-|--------|---------|----------|----------|-------------|---------------|
-| Cosine Sim ↓ | 0.998 | 0.850 | 0.998 | 0.857 | **0.774** |
-| Embed Std ↑ | 0.040 | 0.297 | 0.040 | 0.231 | **0.308** |
-| SV Ratio ↓ | 0.898 | 0.576 | 0.898 | 0.514 | **0.457** |
+### Embedding diversity metrics
 
-**H-JEPA-LM has the most diverse embeddings** — cosine similarity 0.774 vs GPT's 0.998.
+| Model | Cosine Sim ↓ | Embed Std ↑ | SV Ratio ↓ | Params |
+|:--|:--:|:--:|:--:|:--:|
+| GPT (NTP) | 0.998 | 0.040 | 0.898 | 4.7M |
+| BERT (MLM) | 0.850 | 0.297 | 0.576 | 8.7M |
+| LLM-JEPA | 0.998 | 0.040 | 0.898 | 4.9M |
+| JEPA-LM | 0.857 | 0.231 | 0.514 | 5.6M |
+| **H-JEPA-LM** | **0.774** | **0.308** | **0.457** | 5.8M |
 
-## Installation
+<p align="center">
+  <img src="benchmarks/parameter_comparison.png" width="70%">
+</p>
+
+### Why these metrics matter
+
+- **Cosine Similarity** — Measures how similar embeddings are to each other. Lower = more diverse representations. GPT embeddings are nearly identical (0.998).
+- **Embedding Std Dev** — Standard deviation of embedding magnitudes. Higher = more variation in what the model encodes.
+- **SV Ratio** — Ratio of smallest to largest singular value. Lower = more balanced use of embedding dimensions.
+
+## Install
 
 ```bash
-pip install torch>=2.0.0
-pip install transformers datasets
+pip install torch>=2.0.0 transformers datasets
+# or
+pip install -r requirements.txt
 ```
 
-## Quick Start
+## Quick start
 
 ```python
 from jepalm.model import JEPELM
@@ -78,11 +142,21 @@ print(f"Parameters: {params['total']:,}")
 # Train JEPA-LM on Wikipedia
 python train.py --preset small --dataset wikitext --max_samples 10000
 
-# Run 5-way benchmark
+# Run 5-way benchmark comparison
 python benchmark_hjepa.py
+
+# Quick smoke test
+python test_model.py
 ```
 
-## Project Structure
+## How it works
+
+1. **Hierarchical prediction** — Predict at two levels: token-level details and semantic-level meaning. The predictor uses a narrow bottleneck to force abstraction.
+2. **EMA target encoder** — A slow-moving copy of the encoder provides stable targets. Combined with stop-gradient, this prevents the model from collapsing to trivial solutions.
+3. **Action conditioning** — Actions are encoded and fused into the highest-level predictions, enabling the model to predict consequences of actions.
+4. **World model planning** — The model can plan sequences of actions by rolling out predictions in latent space and selecting the best trajectory (K=10 random rollouts).
+
+## Project structure
 
 ```
 JEPA-LM/
@@ -98,31 +172,27 @@ JEPA-LM/
 │   ├── train.py              # Training loop
 │   ├── dataset.py            # Dataset loading
 │   └── eval.py               # Evaluation
+├── benchmarks/               # Benchmark charts & scripts
+│   ├── diversity_benchmarks.png
+│   ├── cosine_similarity.png
+│   ├── architecture_overview.png
+│   ├── parameter_comparison.png
+│   └── generate_charts.py
 ├── benchmark_hjepa.py        # 5-way comparison benchmark
+├── hjepa_model.py            # H-JEPA-LM with action conditioning
 ├── train.py                  # Training entry point
 ├── test_model.py             # Quick smoke test
-└── requirements.txt
+├── requirements.txt
+└── LICENSE
 ```
-
-## How It Differs
-
-| Aspect | LLM-JEPA (ICLR 2026) | JEPA-LM (Ours) |
-|--------|----------------------|----------------|
-| Architecture | Existing LLM + extra loss | New architecture |
-| JEPA Role | Secondary (optional) | Primary (core design) |
-| Target Encoder | Same model (symmetric) | EMA copy (asymmetric) |
-| Collapse Prevention | None | EMA + stop-gradient |
-| Masking | None (needs paired data) | Span masking (self-supervised) |
-| Attention | Causal (left-to-right) | Bidirectional |
-| Data Required | Paired Text↔Code | Raw text only |
 
 ## References
 
-- I-JEPA (CVPR 2023): Image-based JEPA
-- V-JEPA (2024): Video-based JEPA
-- LLM-JEPA (ICLR 2026): Text JEPA (bolt-on to existing LLM)
-- **JEPA-LM (Ours)**: JEPA as primary objective for text
+- [I-JEPA](https://arxiv.org/abs/2301.08243) — Image-based JEPA (CVPR 2023)
+- [V-JEPA](https://arxiv.org/abs/2404.08471) — Video-based JEPA (2024)
+- [LLM-JEPA](https://arxiv.org/abs/2502.16982) — Text JEPA bolted onto existing LLMs (ICLR 2026)
+- **JEPA-LM (Ours)** — JEPA as primary objective for text
 
 ## License
 
-MIT
+MIT — contributions welcome.
